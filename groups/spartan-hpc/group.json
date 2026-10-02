@@ -1,0 +1,5 @@
+{
+  "name": "spartan-hpc",
+  "description": "Safe and efficient Spartan CPU/GPU job submission",
+  "skills": ["spartan-cpu-jobs", "spartan-gpu-jobs"]
+}
