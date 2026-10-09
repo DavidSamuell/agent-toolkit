@@ -4,6 +4,7 @@
 
 - Introduced the `spartan-hpc` group with CPU and GPU submission skills, including
   mandatory duplicate-work preflight and separate submission/resource quota checks.
+- Added the `general` group with the portable `using-git-worktrees` isolation skill.
 - Added explicit group/harness installation for Codex, OMP and Claude Code using
   shared managed copies and per-skill compatibility links.
 - Added deliberate updates, dry-runs, drift diagnostics and ownership-aware uninstall.

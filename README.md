@@ -1,16 +1,15 @@
 # agent-toolkit
 
-Personal, grouped agent customizations. Currently ships one group, `spartan-hpc`,
-with two portable skills:
+Personal, grouped agent customizations. Currently ships two groups, `general` and
+`spartan-hpc`, with three portable skills:
 
+- `using-git-worktrees`: isolated workspace setup with native-tool and Git fallbacks.
 - `spartan-cpu-jobs`: CPU submission/recovery, live queue and quota checks,
   measured sizing, packing and output verification.
 - `spartan-gpu-jobs`: GPU submission/recovery, MIG and preemption decisions,
   measured batching, quota-aware scheduling and durable results.
 
-Both require an existing-job preflight before every submission, including pilots,
-and distinguish submission quota from running-resource capacity. They are
-instructions, not automatic job launchers.
+All skills are instructions, not automatic workflow or job launchers.
 
 ## Install
 
@@ -27,8 +26,8 @@ packages. Codex, OMP and Claude Code have different discovery paths:
 git clone git@github.com:DavidSamuell/agent-toolkit.git
 cd agent-toolkit
 python3 manage.py list
-python3 manage.py install --group spartan-hpc --agent codex --agent omp --agent claude --dry-run
-python3 manage.py install --group spartan-hpc --agent codex --agent omp --agent claude
+python3 manage.py install --group general --group spartan-hpc --agent codex --agent omp --agent claude --dry-run
+python3 manage.py install --group general --group spartan-hpc --agent codex --agent omp --agent claude
 python3 manage.py status
 python3 manage.py doctor
 ```
@@ -127,7 +126,10 @@ inspection before retrying. Do not run external edits during installation.
 ```text
 toolkit.json                    Explicit group catalog and schema version
 manage.py                       Stdlib installer CLI
-groups/spartan-hpc/group.json    Group description and explicit skill names
+groups/general/group.json       Group description and explicit skill names
+groups/general/skills/
+  using-git-worktrees/SKILL.md
+groups/spartan-hpc/group.json   Group description and explicit skill names
 groups/spartan-hpc/skills/
   spartan-cpu-jobs/SKILL.md
   spartan-gpu-jobs/SKILL.md

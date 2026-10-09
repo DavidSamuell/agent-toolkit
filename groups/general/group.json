@@ -1,0 +1,5 @@
+{
+  "name": "general",
+  "description": "General-purpose agent workflow skills",
+  "skills": ["using-git-worktrees"]
+}
