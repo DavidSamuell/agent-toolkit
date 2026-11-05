@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Added `bootstrap.sh`, a fresh-machine entry point: prerequisite checks (including the
+  macOS Python stub), clone, dry-run plan, confirmation via the terminal or `--yes`,
+  install and `doctor`. It is safe to pipe from `gh api` and has 5 offline tests.
+- Added external groups: a group can point at another Git repository and install it
+  per harness with `skills` (managed copies), `claude-plugin` or `script` methods,
+  with origin-checked checkouts, deliberate fast-forward updates, a CLI preflight,
+  `uninstall --skip-native`, and status checks for checkouts and Claude plugins.
+- Added the `agent-skills` group (DavidSamuell/agent-skills fork: skills for Codex/OMP,
+  plugin for Claude Code) and the `llm-wiki` group (`~/wiki` via its `setup.sh`,
+  Claude Code and OMP).
+- `install --all` now skips harnesses a group does not support.
+- Added 10 offline tests for external groups.
 - Introduced the `spartan-hpc` group with CPU and GPU submission skills, including
   mandatory duplicate-work preflight and separate submission/resource quota checks.
 - Added the `general` group with the portable `using-git-worktrees` isolation skill.

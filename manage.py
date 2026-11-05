@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Safe, transactional installer for the agent-toolkit checkout.
 
-The source checkout contains only skills today.  Manifests are deliberately
-strict: adding another asset kind requires an implementation here before it can
-be accepted by this program.
+Groups are either *local* (skill directories shipped in this checkout) or
+*external* (another Git repository, installed per harness by one of a small,
+fixed set of methods: managed skill copies, a Claude Code plugin, or the
+repository's own setup script).  Manifests are deliberately strict: adding
+another asset kind or method requires an implementation here before it can be
+accepted by this program.
 """
 from __future__ import annotations
 
@@ -15,6 +18,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -31,6 +35,9 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 STATE_RELATIVE = Path(".local") / "state" / "agent-toolkit"
 STATE_FILENAME = "installations.json"
 LOCK_FILENAME = "install.lock"
+SOURCES_RELATIVE = Path(".local") / "share" / "agent-toolkit" / "sources"
+EXTERNAL_METHODS = ("skills", "claude-plugin", "script")
+SYNC_MODES = ("ff-only", "clone-only")
 
 
 class ToolkitError(Exception):
@@ -39,12 +46,23 @@ class ToolkitError(Exception):
 
 class Source:
     def __init__(self, root: Path, groups: Dict[str, dict], skills: Dict[str, Path],
-                 skill_groups: Dict[str, str], revision: Optional[str]):
+                 skill_groups: Dict[str, str], revision: Optional[str],
+                 skill_revisions: Optional[Dict[str, Optional[str]]] = None):
         self.root = root
         self.groups = groups
         self.skills = skills
         self.skill_groups = skill_groups
         self.revision = revision
+        self.skill_revisions = skill_revisions or {}
+
+    def revision_for(self, skill: str) -> Optional[str]:
+        return self.skill_revisions.get(skill, self.revision)
+
+    def external(self, group: str) -> Optional[dict]:
+        return self.groups[group].get("external")
+
+    def skill_agents(self, group: str) -> Set[str]:
+        return self.groups[group]["skill_agents"]
 
     @property
     def group_names(self) -> List[str]:
@@ -303,7 +321,7 @@ def _git_revision(root: Path) -> Optional[str]:
     return revision or None
 
 
-def load_source(root: Optional[Path] = None) -> Source:
+def load_source(root: Optional[Path] = None, home: Optional[Path] = None) -> Source:
     root = (root or Path(__file__).resolve().parent).absolute()
     _directory_nonsymlink(root, "source root")
     manifest_path = root / "toolkit.json"
@@ -348,13 +366,15 @@ def load_source(root: Optional[Path] = None) -> Source:
     groups: Dict[str, dict] = {}
     skills: Dict[str, Path] = {}
     skill_groups: Dict[str, str] = {}
+    skill_revisions: Dict[str, Optional[str]] = {}
     for group_name in group_names:
         group_dir = groups_root / group_name
         _directory_nonsymlink(group_dir, "group directory")
         group_manifest_path = group_dir / "group.json"
         _regular_nonsymlink(group_manifest_path, "group manifest")
         group_manifest = _json_object(group_manifest_path, "group manifest")
-        expected_group_keys = {"name", "description", "skills"}
+        is_external = "external" in group_manifest
+        expected_group_keys = {"name", "description", "external"} if is_external else {"name", "description", "skills"}
         extra_group = set(group_manifest) - expected_group_keys
         missing_group = expected_group_keys - set(group_manifest)
         if extra_group:
@@ -366,6 +386,47 @@ def load_source(root: Optional[Path] = None) -> Source:
         _safe_name(group_manifest["name"], "group")
         if not isinstance(group_manifest["description"], str) or not group_manifest["description"].strip():
             raise ToolkitError("group description must be a non-empty string: %s" % group_manifest_path)
+
+        try:
+            group_entries = {entry.name for entry in os.scandir(group_dir)}
+        except OSError as exc:
+            raise ToolkitError("cannot inspect group directory %s: %s" % (group_dir, exc))
+
+        if is_external:
+            unsupported_group_entries = group_entries - {"group.json"}
+            if unsupported_group_entries:
+                raise ToolkitError("external group %s may only contain group.json: %s" % (
+                    group_name, ", ".join(sorted(unsupported_group_entries))))
+            external = _parse_external(group_name, group_manifest["external"], group_manifest_path, home)
+            skill_root = external["skills_root"]
+            group_skills: List[str] = []
+            revision = None
+            if skill_root is not None and _kind(skill_root) == "directory":
+                revision = _git_revision(external["checkout"])
+                for entry in sorted(os.scandir(skill_root), key=lambda item: item.name):
+                    candidate = Path(entry.path)
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    if _kind(candidate / "SKILL.md") != "file":
+                        continue
+                    group_skills.append(_safe_name(entry.name, "skill"))
+            for skill_name in group_skills:
+                if skill_name in skill_groups:
+                    raise ToolkitError("skill name is not globally unique: %s" % skill_name)
+                skill_dir = skill_root / skill_name
+                _reject_source_symlinks(skill_dir)
+                skills[skill_name] = skill_dir
+                skill_groups[skill_name] = group_name
+                skill_revisions[skill_name] = revision
+            groups[group_name] = {
+                "name": group_name,
+                "description": group_manifest["description"],
+                "skills": group_skills,
+                "external": external,
+                "skill_agents": {agent for agent, spec in external["agents"].items() if spec["method"] == "skills"},
+            }
+            continue
+
         group_skills_value = group_manifest["skills"]
         if not isinstance(group_skills_value, list) or not group_skills_value:
             raise ToolkitError("group skills must be a non-empty list: %s" % group_manifest_path)
@@ -373,10 +434,6 @@ def load_source(root: Optional[Path] = None) -> Source:
         if len(set(group_skills)) != len(group_skills):
             raise ToolkitError("duplicate skills in %s" % group_manifest_path)
 
-        try:
-            group_entries = {entry.name for entry in os.scandir(group_dir)}
-        except OSError as exc:
-            raise ToolkitError("cannot inspect group directory %s: %s" % (group_dir, exc))
         unsupported_group_entries = group_entries - {"group.json", "skills"}
         if unsupported_group_entries:
             raise ToolkitError("unsupported asset(s) in group %s: %s" % (group_name, ", ".join(sorted(unsupported_group_entries))))
@@ -403,9 +460,109 @@ def load_source(root: Optional[Path] = None) -> Source:
             "name": group_name,
             "description": group_manifest["description"],
             "skills": group_skills,
+            "external": None,
+            "skill_agents": set(AGENTS),
         }
 
-    return Source(root, groups, skills, skill_groups, _git_revision(root))
+    return Source(root, groups, skills, skill_groups, _git_revision(root), skill_revisions)
+
+
+def _parse_external(group: str, value: object, manifest_path: Path, home: Optional[Path]) -> dict:
+    """Validate an external group's manifest block.
+
+    Shape::
+
+        "external": {
+          "repository": "<git URL or path>",
+          "ref": "<branch or tag>",
+          "checkout": "managed" | "home:<relative path>",
+          "sync": "ff-only" | "clone-only",
+          "agents": {"<agent>": {"method": "skills", "path": "skills"}
+                                | {"method": "claude-plugin", "marketplace": "<source>",
+                                   "marketplace_name": "<name>", "plugin": "<plugin>@<marketplace>"}
+                                | {"method": "script", "command": ["argv", ...],
+                                   "uninstall_note": "<manual removal steps>"}}
+        }
+    """
+    where = "%s (external)" % manifest_path
+    if not isinstance(value, dict):
+        raise ToolkitError("external must be an object: %s" % where)
+    expected = {"repository", "ref", "checkout", "sync", "agents"}
+    extra = set(value) - expected
+    missing = expected - set(value)
+    if extra:
+        raise ToolkitError("unsupported key(s) in %s: %s" % (where, ", ".join(sorted(extra))))
+    if missing:
+        raise ToolkitError("missing key(s) in %s: %s" % (where, ", ".join(sorted(missing))))
+    for key in ("repository", "ref", "checkout"):
+        if not isinstance(value[key], str) or not value[key].strip():
+            raise ToolkitError("%s must be a non-empty string: %s" % (key, where))
+    if value["ref"].startswith("-") or value["repository"].startswith("-"):
+        raise ToolkitError("repository and ref must not start with '-': %s" % where)
+    if value["sync"] not in SYNC_MODES:
+        raise ToolkitError("sync must be one of %s: %s" % (", ".join(SYNC_MODES), where))
+
+    checkout_value = value["checkout"]
+    base_home = home if home is not None else _absolute_home(None)
+    if checkout_value == "managed":
+        checkout = base_home / SOURCES_RELATIVE / group
+    elif checkout_value.startswith("home:"):
+        relative = checkout_value[len("home:"):]
+        parts = Path(relative).parts
+        if not relative or Path(relative).is_absolute() or any(part in ("..", ".") for part in parts):
+            raise ToolkitError("checkout must be 'managed' or 'home:<relative path>': %s" % where)
+        checkout = base_home / relative
+    else:
+        raise ToolkitError("checkout must be 'managed' or 'home:<relative path>': %s" % where)
+    _check_home_path(base_home, checkout, allow_final_missing=True)
+
+    agents_value = value["agents"]
+    if not isinstance(agents_value, dict) or not agents_value:
+        raise ToolkitError("agents must be a non-empty object: %s" % where)
+    agents: Dict[str, dict] = {}
+    skills_paths: Set[str] = set()
+    for agent, spec in agents_value.items():
+        if agent not in AGENTS:
+            raise ToolkitError("unknown agent %r in %s" % (agent, where))
+        if not isinstance(spec, dict) or spec.get("method") not in EXTERNAL_METHODS:
+            raise ToolkitError("agent %s needs a method (%s): %s" % (agent, ", ".join(EXTERNAL_METHODS), where))
+        method = spec["method"]
+        if method == "skills":
+            keys = {"method", "path"}
+            if set(spec) != keys or not isinstance(spec["path"], str):
+                raise ToolkitError("skills method takes exactly 'path': %s/%s" % (where, agent))
+            rel = Path(spec["path"])
+            if rel.is_absolute() or any(part == ".." for part in rel.parts):
+                raise ToolkitError("skills path must stay inside the checkout: %s/%s" % (where, agent))
+            skills_paths.add(spec["path"])
+        elif method == "claude-plugin":
+            keys = {"method", "marketplace", "marketplace_name", "plugin"}
+            if agent != "claude":
+                raise ToolkitError("claude-plugin method is only valid for claude: %s/%s" % (where, agent))
+            if set(spec) != keys or not all(isinstance(spec[k], str) and spec[k] for k in keys):
+                raise ToolkitError("claude-plugin method takes marketplace, marketplace_name, plugin: %s" % where)
+            if spec["plugin"].split("@")[-1] != spec["marketplace_name"]:
+                raise ToolkitError("plugin must be <name>@<marketplace_name>: %s" % where)
+        else:
+            if set(spec) - {"method", "command", "uninstall_note"} or "command" not in spec:
+                raise ToolkitError("script method takes command and optional uninstall_note: %s/%s" % (where, agent))
+            command = spec["command"]
+            if not isinstance(command, list) or not command or not all(isinstance(a, str) and a for a in command):
+                raise ToolkitError("script command must be a non-empty argv list: %s/%s" % (where, agent))
+            if "uninstall_note" in spec and not isinstance(spec["uninstall_note"], str):
+                raise ToolkitError("uninstall_note must be a string: %s/%s" % (where, agent))
+        agents[agent] = dict(spec)
+    if len(skills_paths) > 1:
+        raise ToolkitError("all skills-method agents must share one path: %s" % where)
+    skills_root = checkout / skills_paths.pop() if skills_paths else None
+    return {
+        "repository": value["repository"],
+        "ref": value["ref"],
+        "checkout": checkout,
+        "sync": value["sync"],
+        "agents": agents,
+        "skills_root": skills_root,
+    }
 
 
 def state_dir(home: Path) -> Path:
@@ -648,6 +805,8 @@ def _owners_for(source: Source, selections: Set[Tuple[str, str]]) -> Dict[str, S
     for group, agent in selections:
         if group not in source.groups:
             raise ToolkitError("selected group is missing from source: %s" % group)
+        if agent not in source.skill_agents(group):
+            continue
         for skill in source.groups[group]["skills"]:
             owners.setdefault(skill, set()).add((group, agent))
     return owners
@@ -868,7 +1027,7 @@ def _build_plan(source: Source, home: Path, state: dict, operation: str,
             asset_revision = metadata["revision"]
         else:
             asset_sourcepath = str(source_path)
-            asset_revision = source.revision
+            asset_revision = source.revision_for(skill)
         new_assets[skill] = _asset_metadata(
             source, skill, active_owners, installed_hashes[skill], asset_sourcepath, asset_revision
         )
@@ -876,6 +1035,8 @@ def _build_plan(source: Source, home: Path, state: dict, operation: str,
     # Compatibility links are determined by the resulting selection union.
     desired_link_agents: Dict[str, Set[str]] = {skill: set() for skill in owners}
     for group, agent in desired_pairs:
+        if group not in source.groups or agent not in source.skill_agents(group):
+            continue
         for skill in source.groups[group]["skills"]:
             if agent in COMPAT_AGENTS:
                 desired_link_agents.setdefault(skill, set()).add(agent)
@@ -1033,7 +1194,7 @@ def _status_details(source: Source, home: Path, state: dict) -> List[str]:
 
     desired_links: Set[Tuple[str, str]] = set()
     for group, agent in selections:
-        if group not in source.groups:
+        if group not in source.groups or agent not in source.skill_agents(group):
             continue
         for skill in source.groups[group]["skills"]:
             if agent in COMPAT_AGENTS:
@@ -1054,6 +1215,239 @@ def _status_details(source: Source, home: Path, state: dict) -> List[str]:
                 details.append("unexpected compatibility destination: %s" % path)
             elif kind == "symlink" and skill in state["assets"]:
                 details.append("compatibility link points elsewhere: %s" % path)
+    details.extend(_external_status(source, home, state))
+    return details
+
+
+# ---------- external groups: checkouts and native harness actions ----------
+
+def _tool(name: str) -> str:
+    """Executable for a harness CLI; overridable for isolated tests."""
+    return os.environ.get("AGENT_TOOLKIT_%s" % name.upper(), name)
+
+
+def _require_tool(name: str) -> str:
+    executable = _tool(name)
+    if shutil.which(executable) is None:
+        raise ToolkitError("%s is required but was not found on PATH" % executable)
+    return executable
+
+
+def _quote(argv: Sequence[str]) -> str:
+    return " ".join(shlex.quote(str(item)) for item in argv)
+
+
+def _run_command(argv: Sequence[str], cwd: Optional[Path] = None) -> None:
+    print("  $ %s%s" % (_quote(argv), " (in %s)" % cwd if cwd else ""))
+    try:
+        completed = subprocess.run([str(a) for a in argv], cwd=str(cwd) if cwd else None, check=False)
+    except OSError as exc:
+        raise ToolkitError("cannot run %s: %s" % (argv[0], exc))
+    if completed.returncode != 0:
+        raise ToolkitError("command failed with exit code %d: %s" % (completed.returncode, _quote(argv)))
+
+
+def _query(argv: Sequence[str]) -> str:
+    try:
+        completed = subprocess.run([str(a) for a in argv], check=False, text=True,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except OSError as exc:
+        raise ToolkitError("cannot run %s: %s" % (argv[0], exc))
+    if completed.returncode != 0:
+        raise ToolkitError("command failed with exit code %d: %s\n%s" % (
+            completed.returncode, _quote(argv), completed.stderr.strip()))
+    return completed.stdout
+
+
+def _normalise_remote(url: str) -> str:
+    value = url.strip().rstrip("/")
+    match = re.fullmatch(r"git@([^:]+):(.+)", value)
+    if match:
+        value = "https://%s/%s" % match.groups()
+    if value.endswith(".git"):
+        value = value[:-4]
+    return value.lower()
+
+
+def _step(argv: Sequence[str], dry_run: bool, cwd: Optional[Path] = None) -> None:
+    if dry_run:
+        print("  would run: %s%s" % (_quote(argv), " (in %s)" % cwd if cwd else ""))
+    else:
+        _run_command(argv, cwd)
+
+
+def _sync_checkout(home: Path, group: str, external: dict, operation: str, dry_run: bool) -> None:
+    """Clone a missing checkout; fast-forward it only on an explicit update."""
+    checkout = external["checkout"]
+    git = _require_tool("git")
+    _check_home_path(home, checkout, allow_final_missing=True)
+    kind = _kind(checkout)
+    if kind == "missing":
+        if not dry_run:
+            checkout.parent.mkdir(parents=True, exist_ok=True)
+            _check_home_path(home, checkout.parent, allow_final_missing=False)
+        _step([git, "clone", "--branch", external["ref"], "--", external["repository"], str(checkout)], dry_run)
+        return
+    if kind != "directory":
+        raise ToolkitError("checkout for %s is not a directory: %s" % (group, checkout))
+    if _kind(checkout / ".git") == "missing":
+        raise ToolkitError("checkout for %s exists but is not a Git repository; move it aside: %s" % (group, checkout))
+    origin = _query([git, "-C", str(checkout), "remote", "get-url", "origin"]).strip()
+    if _normalise_remote(origin) != _normalise_remote(external["repository"]):
+        raise ToolkitError("checkout %s tracks %s, expected %s" % (checkout, origin, external["repository"]))
+    if operation != "update" or external["sync"] == "clone-only":
+        print("  checkout present for %s: %s" % (group, checkout))
+        return
+    if _query([git, "-C", str(checkout), "status", "--porcelain"]).strip():
+        raise ToolkitError("checkout has local changes; commit or stash them before update: %s" % checkout)
+    _step([git, "-C", str(checkout), "fetch", "origin", external["ref"]], dry_run)
+    _step([git, "-C", str(checkout), "merge", "--ff-only", "FETCH_HEAD"], dry_run)
+
+
+def _mentions(value: object, needle: str) -> bool:
+    if isinstance(value, str):
+        return value == needle
+    if isinstance(value, dict):
+        return any(_mentions(item, needle) for item in value.values())
+    if isinstance(value, list):
+        return any(_mentions(item, needle) for item in value)
+    return False
+
+
+def _claude_list(claude: str, args: Sequence[str]) -> list:
+    output = _query([claude] + list(args) + ["--json"])
+    try:
+        value = json.loads(output or "[]")
+    except json.JSONDecodeError as exc:
+        raise ToolkitError("unexpected output from %s: %s" % (_quote([claude] + list(args)), exc))
+    return value if isinstance(value, list) else []
+
+
+def _claude_plugin_state(spec: dict) -> Tuple[str, bool, bool]:
+    claude = _require_tool("claude")
+    marketplaces = _claude_list(claude, ["plugin", "marketplace", "list"])
+    has_marketplace = any(isinstance(item, dict) and item.get("name") == spec["marketplace_name"]
+                          for item in marketplaces)
+    plugin_name = spec["plugin"].split("@")[0]
+    plugins = _claude_list(claude, ["plugin", "list"])
+    installed = any(
+        _mentions(item, spec["plugin"]) or (
+            isinstance(item, dict) and item.get("name") == plugin_name
+            and _mentions(item, spec["marketplace_name"]))
+        for item in plugins
+    )
+    return claude, has_marketplace, installed
+
+
+def _claude_plugin(spec: dict, operation: str, dry_run: bool) -> None:
+    claude, has_marketplace, installed = _claude_plugin_state(spec)
+    steps: List[List[str]] = []
+    if operation in ("install", "update"):
+        if not has_marketplace:
+            steps.append([claude, "plugin", "marketplace", "add", spec["marketplace"], "--scope", "user"])
+        elif operation == "update":
+            steps.append([claude, "plugin", "marketplace", "update", spec["marketplace_name"]])
+        if not installed:
+            steps.append([claude, "plugin", "install", spec["plugin"], "--scope", "user"])
+        elif operation == "update":
+            steps.append([claude, "plugin", "update", spec["plugin"], "--scope", "user"])
+    else:
+        if installed:
+            steps.append([claude, "plugin", "uninstall", spec["plugin"], "--scope", "user"])
+        if has_marketplace:
+            steps.append([claude, "plugin", "marketplace", "remove", spec["marketplace_name"]])
+    if not steps:
+        print("  claude plugin %s already %s" % (spec["plugin"], "installed" if operation != "uninstall" else "absent"))
+    for argv in steps:
+        _step(argv, dry_run)
+
+
+def _native_pairs(source: Source, pairs: Iterable[Tuple[str, str]]) -> List[Tuple[str, str, dict, dict]]:
+    result = []
+    for group, agent in sorted(set(pairs)):
+        if group not in source.groups:
+            continue
+        external = source.external(group)
+        if external is None or agent not in external["agents"]:
+            continue
+        spec = external["agents"][agent]
+        if spec["method"] != "skills":
+            result.append((group, agent, external, spec))
+    return result
+
+
+def _preflight_native_uninstall(source: Source, pairs: Iterable[Tuple[str, str]], skip_native: bool) -> None:
+    if skip_native:
+        return
+    for group, agent, _external, spec in _native_pairs(source, pairs):
+        if spec["method"] == "script":
+            note = spec.get("uninstall_note") or "Remove its configuration manually."
+            raise ToolkitError(
+                "%s/%s was installed by the repository's own setup script, which has no uninstaller. %s "
+                "Then rerun uninstall with --skip-native to drop the toolkit binding." % (group, agent, note))
+
+
+def _run_native(source: Source, pairs: Iterable[Tuple[str, str]], operation: str,
+                dry_run: bool) -> None:
+    for group, agent, external, spec in _native_pairs(source, pairs):
+        print("%s %s/%s (%s):" % ("Would " + operation if dry_run else operation.capitalize(), group, agent, spec["method"]))
+        if spec["method"] == "claude-plugin":
+            _claude_plugin(spec, operation, dry_run)
+        elif spec["method"] == "script":
+            if operation == "uninstall":
+                continue
+            _require_tool(spec["command"][0])
+            if _kind(external["checkout"]) == "missing" and not dry_run:
+                raise ToolkitError("checkout missing for %s: %s" % (group, external["checkout"]))
+            _step(spec["command"], dry_run, cwd=external["checkout"])
+
+
+def _preflight_tools(source: Source, pairs: Iterable[Tuple[str, str]], skip_native: bool = False,
+                     need_git: bool = True) -> None:
+    """Fail before any clone or native step when a required CLI is missing."""
+    pairs = set(pairs)
+    if need_git and any(group in source.groups and source.external(group) is not None for group, _ in pairs):
+        _require_tool("git")
+    if skip_native:
+        return
+    for _group, _agent, _external, spec in _native_pairs(source, pairs):
+        _require_tool("claude" if spec["method"] == "claude-plugin" else spec["command"][0])
+
+
+def _sync_external(source: Source, home: Path, groups: Iterable[str], operation: str, dry_run: bool) -> bool:
+    synced = False
+    for group in sorted(set(groups)):
+        external = source.external(group) if group in source.groups else None
+        if external is None:
+            continue
+        print("%s checkout for %s (%s@%s):" % ("Would sync" if dry_run else "Syncing", group,
+                                              external["repository"], external["ref"]))
+        _sync_checkout(home, group, external, operation, dry_run)
+        if dry_run and _kind(external["checkout"]) == "missing" and external["skills_root"] is not None:
+            print("  skills for %s are discovered after the clone; dry-run cannot list them" % group)
+        synced = True
+    return synced
+
+
+def _external_status(source: Source, home: Path, state: dict) -> List[str]:
+    details: List[str] = []
+    for group, agent in sorted(_state_pairs(state)):
+        if group not in source.groups or source.external(group) is None:
+            continue
+        external = source.external(group)
+        if _kind(external["checkout"]) != "directory":
+            details.append("missing checkout for %s: %s" % (group, external["checkout"]))
+        spec = external["agents"].get(agent)
+        if spec is None:
+            details.append("recorded agent no longer supported by %s: %s" % (group, agent))
+        elif spec["method"] == "claude-plugin":
+            try:
+                _claude, _market, installed = _claude_plugin_state(spec)
+            except ToolkitError as exc:
+                details.append("cannot verify claude plugin %s: %s" % (spec["plugin"], exc))
+                continue
+            if not installed:
+                details.append("claude plugin not installed: %s" % spec["plugin"])
     return details
 
 
@@ -1062,6 +1456,14 @@ def command_list(source: Source) -> int:
     for group_name in source.group_names:
         group = source.groups[group_name]
         print("%s - %s" % (group_name, group["description"]))
+        external = group["external"]
+        if external is not None:
+            print("  source: %s@%s -> %s" % (external["repository"], external["ref"], external["checkout"]))
+            for agent in AGENTS:
+                spec = external["agents"].get(agent)
+                print("  %s: %s" % (agent, spec["method"] if spec else "not supported"))
+            if external["skills_root"] is not None and not group["skills"]:
+                print("  (skills are listed once the checkout exists)")
         for skill in group["skills"]:
             print("  - %s" % skill)
     return 0
@@ -1129,7 +1531,7 @@ def _normalise_home_args(argv: Sequence[str]) -> Tuple[Optional[str], List[str]]
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="manage.py",
-        description="Safely install the agent-toolkit skills into an isolated agent HOME.",
+        description="Safely install agent-toolkit groups (local skills and external tools) for Codex, OMP and Claude Code.",
     )
     parser.add_argument("--home", help="target HOME (accepted before or after the command)")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1156,6 +1558,8 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall.add_argument("--all", dest="all_groups", action="store_true", help="remove all recorded groups")
     uninstall.add_argument("--agent", action="append", choices=AGENTS, default=[], help="limit removal to these agents (repeatable)")
     uninstall.add_argument("--dry-run", action="store_true", help="show changes without creating locks or files")
+    uninstall.add_argument("--skip-native", action="store_true",
+                           help="drop toolkit bindings without running plugin/script uninstall steps")
     return parser
 
 
@@ -1171,7 +1575,20 @@ def _requested_install_pairs(source: Source, groups: List[str], agents: List[str
     for group in selected_groups:
         if group not in source.groups:
             raise ToolkitError("unknown group: %s" % group)
-    return {(group, agent) for group in selected_groups for agent in agents}
+    pairs: Set[Tuple[str, str]] = set()
+    for group in sorted(selected_groups):
+        external = source.external(group)
+        for agent in agents:
+            if external is not None and agent not in external["agents"]:
+                if all_groups:
+                    # --all means "every group this harness supports".
+                    continue
+                raise ToolkitError("group %s does not support %s (supported: %s)" % (
+                    group, agent, ", ".join(sorted(external["agents"]))))
+            pairs.add((group, agent))
+    if not pairs:
+        raise ToolkitError("no selected group supports the requested agent(s)")
+    return pairs
 
 
 def _requested_uninstall_pairs(source: Source, state: dict, groups: List[str], agents: List[str], all_groups: bool) -> Tuple[Set[Tuple[str, str]], bool]:
@@ -1203,7 +1620,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser = build_parser()
         arguments = parser.parse_args(normalised)
         home = _absolute_home(home_override or arguments.home)
-        source = load_source()
+        source = load_source(home=home)
 
         if arguments.command == "list":
             return command_list(source)
@@ -1216,14 +1633,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if arguments.all_groups and groups:
                 raise ToolkitError("install cannot combine --all and --group")
             requested = _requested_install_pairs(source, groups, arguments.agent, arguments.all_groups)
+            _preflight_tools(source, requested)
+            if _sync_external(source, home, {g for g, _ in requested}, "install", arguments.dry_run) and not arguments.dry_run:
+                source = load_source(home=home)
+            # Native steps run before state is recorded: a failure leaves no
+            # binding behind, and every native step is idempotent on rerun.
+            _run_native(source, requested, "install", arguments.dry_run)
             return _run_mutation(source, home, "install", requested, False, arguments.dry_run)
         if arguments.command == "update":
+            recorded = _state_pairs(read_state(home))
+            _preflight_tools(source, recorded)
+            if _sync_external(source, home, {g for g, _ in recorded}, "update", arguments.dry_run) and not arguments.dry_run:
+                source = load_source(home=home)
+            _run_native(source, recorded, "update", arguments.dry_run)
             return _run_mutation(source, home, "update", None, False, arguments.dry_run)
         if arguments.command == "uninstall":
             # Uninstall is allowed to operate on an empty state, but still
             # validates source manifests so unsupported assets are explicit.
             state = read_state(home)
             requested, _ = _requested_uninstall_pairs(source, state, arguments.group, arguments.agent, arguments.all_groups)
+            _preflight_native_uninstall(source, requested, arguments.skip_native)
+            _preflight_tools(source, requested, arguments.skip_native, need_git=False)
+            if not arguments.skip_native:
+                _run_native(source, requested, "uninstall", arguments.dry_run)
             return _run_mutation(source, home, "uninstall", requested, False, arguments.dry_run)
         raise ToolkitError("unknown command")
     except ToolkitError as exc:

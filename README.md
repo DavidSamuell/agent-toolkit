@@ -1,15 +1,55 @@
 # agent-toolkit
 
-Personal, grouped agent customizations. Currently ships two groups, `general` and
-`spartan-hpc`, with three portable skills:
+Personal, grouped agent customizations and the single entry point for setting up
+my agent tools on a fresh machine, for Codex, OMP and Claude Code.
 
-- `using-git-worktrees`: isolated workspace setup with native-tool and Git fallbacks.
-- `spartan-cpu-jobs`: CPU submission/recovery, live queue and quota checks,
-  measured sizing, packing and output verification.
-- `spartan-gpu-jobs`: GPU submission/recovery, MIG and preemption decisions,
-  measured batching, quota-aware scheduling and durable results.
+| Group | Kind | What it installs | Codex | OMP | Claude Code |
+| --- | --- | --- | --- | --- | --- |
+| `general` | local | `using-git-worktrees` | skills | skills | skills |
+| `spartan-hpc` | local | `spartan-cpu-jobs`, `spartan-gpu-jobs` | skills | skills | skills |
+| `agent-skills` | external | [DavidSamuell/agent-skills](https://github.com/DavidSamuell/agent-skills): spec, plan, build, test, review, ship, blind-spot pass, quiz | skills | skills | plugin (adds `/spec`, `/build`, `/quiz`, …) |
+| `llm-wiki` | external | [llm-wiki-database](https://github.com/DavidSamuell/llm-wiki-database) cloned to `~/wiki`, configured by its `setup.sh` | not supported | setup script | setup script |
 
+Local groups ship their skills in this repository. External groups point at another
+Git repository and install it per harness (see [External groups](#external-groups)).
 All skills are instructions, not automatic workflow or job launchers.
+
+## Fresh machine
+
+`bootstrap.sh` checks for `git` and Python 3.8+ (including the macOS case where
+`python3` is only an Xcode install stub), clones the toolkit to `~/agent-toolkit` if
+needed, shows the dry-run plan, asks before installing, then runs `doctor`. The repo
+is private, so use an authenticated GitHub CLI:
+
+```bash
+gh api repos/DavidSamuell/agent-toolkit/contents/bootstrap.sh \
+  -H "Accept: application/vnd.github.raw" | bash -s -- --agent codex --agent omp --agent claude
+```
+
+or clone first (SSH key set up) and run it from the checkout:
+
+```bash
+git clone git@github.com:DavidSamuell/agent-toolkit.git ~/agent-toolkit
+~/agent-toolkit/bootstrap.sh --agent codex --agent omp --agent claude
+```
+
+Options: `--group NAME` (repeatable; default every group), `--dir`, `--repo`, `--ref`,
+and `--yes` to skip the confirmation. With no terminal to confirm on and no `--yes`,
+it stops after the dry run. An existing checkout is used as it is and never pulled.
+
+The same steps by hand:
+
+```bash
+python3 manage.py list
+python3 manage.py install --all --agent codex --agent omp --agent claude --dry-run
+python3 manage.py install --all --agent codex --agent omp --agent claude
+python3 manage.py doctor
+```
+
+`--all` installs every group for every harness it supports, so llm-wiki is skipped for
+Codex. External groups need `git`, plus `claude` for the Claude Code plugin and `bash`
+plus the target CLI (`claude` / `omp`) for llm-wiki's setup script. GitHub access to
+the private llm-wiki repository uses your normal Git credentials.
 
 ## Install
 
@@ -53,6 +93,57 @@ Filesystem installation does not prove that a model will select a skill on every
 future prompt. The descriptions supply task-discovery triggers; invoking/loading
 and automatic model selection are separate behaviors.
 
+## External groups
+
+An external group's `group.json` has an `external` block instead of a `skills` list:
+
+```json
+{
+  "name": "agent-skills",
+  "description": "...",
+  "external": {
+    "repository": "https://github.com/DavidSamuell/agent-skills.git",
+    "ref": "main",
+    "checkout": "managed",
+    "sync": "ff-only",
+    "agents": {
+      "claude": {"method": "claude-plugin", "marketplace": "DavidSamuell/agent-skills",
+                 "marketplace_name": "davidsamuell-agent-skills",
+                 "plugin": "agent-skills@davidsamuell-agent-skills"},
+      "codex": {"method": "skills", "path": "skills"},
+      "omp": {"method": "skills", "path": "skills"}
+    }
+  }
+}
+```
+
+- **checkout**: `managed` clones to `~/.local/share/agent-toolkit/sources/<group>`;
+  `home:<path>` uses a fixed location such as `home:wiki` → `~/wiki`. An existing
+  checkout is reused only if its `origin` matches `repository`.
+- **sync**: `ff-only` fast-forwards the checkout on `update` and refuses a dirty tree;
+  `clone-only` clones when missing and otherwise leaves the checkout to the tool
+  (llm-wiki syncs `~/wiki` itself). `install` never pulls; updates stay deliberate.
+- **methods**, one per harness. A harness missing from `agents` is unsupported, and
+  installing it is refused:
+  - `skills`: every `<path>/<skill>/SKILL.md` in the checkout goes through the same
+    managed-copy, ownership, drift and rollback rules as local skills.
+  - `claude-plugin`: adds the marketplace and installs the plugin at user scope;
+    `update` refreshes both; `uninstall` removes both. Already-present items are skipped.
+  - `script`: runs the repository's own setup command in the checkout on `install`
+    and `update`. Scripts have no uninstaller, so `uninstall` refuses and prints the
+    manual steps from `uninstall_note`; after doing them, `uninstall --skip-native`
+    drops the toolkit binding.
+
+Native steps (plugin commands and setup scripts) run before the binding is recorded,
+so a failure leaves no binding behind, and every step is safe to rerun. They are not
+part of the filesystem transaction, and they are the one place this toolkit changes
+agent configuration and runs repository code: only list repositories you trust.
+`status`/`doctor` also report missing checkouts and Claude plugins that are not installed.
+
+For Claude Code, agent-skills installs the plugin from the fork's default branch.
+Remove upstream `agent-skills@addy-agent-skills` first: both plugins are named
+`agent-skills`, so their commands collide.
+
 ## Deliberate updates
 
 Repository sources are copied, not linked into the checkout. Moving/removing the
@@ -65,8 +156,9 @@ python3 manage.py update
 python3 manage.py doctor
 ```
 
-`git pull` alone cannot change active installed copies. `update` does not fetch Git
-and updates only recorded group/harness selections. New groups require an explicit
+`git pull` alone cannot change active installed copies. `update` does not fetch this
+toolkit's own checkout. It fast-forwards `ff-only` external checkouts, reruns native
+steps, and updates only recorded group/harness selections. New groups require an explicit
 `install`; they are not enabled by an update. Changes to the skills of an already
 selected group are applied by `update`. Removing or relocating an installed source
 asset/group is rejected rather than silently deleting the installed copy: uninstall
@@ -125,6 +217,7 @@ inspection before retrying. Do not run external edits during installation.
 
 ```text
 toolkit.json                    Explicit group catalog and schema version
+bootstrap.sh                    Fresh-machine entry point (prerequisites, clone, confirm, install)
 manage.py                       Stdlib installer CLI
 groups/general/group.json       Group description and explicit skill names
 groups/general/skills/
@@ -133,7 +226,11 @@ groups/spartan-hpc/group.json   Group description and explicit skill names
 groups/spartan-hpc/skills/
   spartan-cpu-jobs/SKILL.md
   spartan-gpu-jobs/SKILL.md
+groups/agent-skills/group.json  External: agent-skills fork (skills + Claude plugin)
+groups/llm-wiki/group.json      External: llm-wiki via its setup.sh
 tests/test_installation.py       Isolated behavior and rollback tests
+tests/test_external_groups.py    External checkouts, plugin and script methods (offline)
+tests/test_bootstrap.py          bootstrap.sh clone, confirmation and selection (offline)
 ```
 
 To add a skills group, create `groups/<group>/group.json`, put its skill directories
@@ -142,7 +239,10 @@ unique. Each group currently accepts only `name`, `description`, and `skills`.
 Skill directories may contain supporting files and executable helpers; installation
 does not run those helpers.
 
-Commands and hooks are intentionally absent from this initial collection. Future
+To add an external group, create `groups/<group>/group.json` with an `external` block
+(the directory holds nothing else) and add the name to `toolkit.json`.
+
+Local groups still ship no commands or hooks. Future
 native assets belong under `groups/<group>/commands/<harness>/` and
 `groups/<group>/hooks/<harness>/`, with real harness-specific adapters and a versioned
 manifest extension. The current installer rejects these assets/manifest keys rather
