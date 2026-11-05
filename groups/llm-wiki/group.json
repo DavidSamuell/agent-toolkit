@@ -1,0 +1,30 @@
+{
+  "name": "llm-wiki",
+  "description": "Global LLM Wiki second brain cloned to ~/wiki, configured by its own setup.sh (plugin, skills, session-sync hooks)",
+  "external": {
+    "repository": "https://github.com/DavidSamuell/llm-wiki-database.git",
+    "ref": "main",
+    "checkout": "home:wiki",
+    "sync": "clone-only",
+    "agents": {
+      "claude": {
+        "method": "script",
+        "command": [
+          "bash",
+          "setup.sh",
+          "--claude"
+        ],
+        "uninstall_note": "To remove it: claude plugin uninstall llm-wiki@llm-wiki; delete ~/.claude/skills/llm-wiki-session-capture and ~/.claude/commands/wiki/capture-session.md; remove the wiki hooks from ~/.claude/settings.json and the LLM Wiki stanza from ~/.claude/CLAUDE.md. ~/wiki itself is kept."
+      },
+      "omp": {
+        "method": "script",
+        "command": [
+          "bash",
+          "setup.sh",
+          "--omp"
+        ],
+        "uninstall_note": "To remove it: delete ~/.omp/agent/skills/llm-wiki and ~/.omp/agent/skills/llm-wiki-session-capture, the wiki-sync extension in ~/.omp/agent/extensions, and the LLM Wiki stanza from ~/.omp/agent/AGENTS.md. ~/wiki itself is kept."
+      }
+    }
+  }
+}

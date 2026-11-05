@@ -1,0 +1,26 @@
+{
+  "name": "agent-skills",
+  "description": "Engineering-lifecycle skills (fork of addyosmani/agent-skills with critical-thinking additions): spec, plan, build, test, review, ship, blind-spot pass, quiz",
+  "external": {
+    "repository": "https://github.com/DavidSamuell/agent-skills.git",
+    "ref": "main",
+    "checkout": "managed",
+    "sync": "ff-only",
+    "agents": {
+      "claude": {
+        "method": "claude-plugin",
+        "marketplace": "DavidSamuell/agent-skills",
+        "marketplace_name": "davidsamuell-agent-skills",
+        "plugin": "agent-skills@davidsamuell-agent-skills"
+      },
+      "codex": {
+        "method": "skills",
+        "path": "skills"
+      },
+      "omp": {
+        "method": "skills",
+        "path": "skills"
+      }
+    }
+  }
+}
