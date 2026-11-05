@@ -16,9 +16,30 @@ All skills are instructions, not automatic workflow or job launchers.
 
 ## Fresh machine
 
+`bootstrap.sh` checks for `git` and Python 3.8+ (including the macOS case where
+`python3` is only an Xcode install stub), clones the toolkit to `~/agent-toolkit` if
+needed, shows the dry-run plan, asks before installing, then runs `doctor`. The repo
+is private, so use an authenticated GitHub CLI:
+
 ```bash
-git clone git@github.com:DavidSamuell/agent-toolkit.git
-cd agent-toolkit
+gh api repos/DavidSamuell/agent-toolkit/contents/bootstrap.sh \
+  -H "Accept: application/vnd.github.raw" | bash -s -- --agent codex --agent omp --agent claude
+```
+
+or clone first (SSH key set up) and run it from the checkout:
+
+```bash
+git clone git@github.com:DavidSamuell/agent-toolkit.git ~/agent-toolkit
+~/agent-toolkit/bootstrap.sh --agent codex --agent omp --agent claude
+```
+
+Options: `--group NAME` (repeatable; default every group), `--dir`, `--repo`, `--ref`,
+and `--yes` to skip the confirmation. With no terminal to confirm on and no `--yes`,
+it stops after the dry run. An existing checkout is used as it is and never pulled.
+
+The same steps by hand:
+
+```bash
 python3 manage.py list
 python3 manage.py install --all --agent codex --agent omp --agent claude --dry-run
 python3 manage.py install --all --agent codex --agent omp --agent claude
@@ -196,6 +217,7 @@ inspection before retrying. Do not run external edits during installation.
 
 ```text
 toolkit.json                    Explicit group catalog and schema version
+bootstrap.sh                    Fresh-machine entry point (prerequisites, clone, confirm, install)
 manage.py                       Stdlib installer CLI
 groups/general/group.json       Group description and explicit skill names
 groups/general/skills/
@@ -208,6 +230,7 @@ groups/agent-skills/group.json  External: agent-skills fork (skills + Claude plu
 groups/llm-wiki/group.json      External: llm-wiki via its setup.sh
 tests/test_installation.py       Isolated behavior and rollback tests
 tests/test_external_groups.py    External checkouts, plugin and script methods (offline)
+tests/test_bootstrap.py          bootstrap.sh clone, confirmation and selection (offline)
 ```
 
 To add a skills group, create `groups/<group>/group.json`, put its skill directories

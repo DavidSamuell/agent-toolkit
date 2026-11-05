@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added `bootstrap.sh`, a fresh-machine entry point: prerequisite checks (including the
+  macOS Python stub), clone, dry-run plan, confirmation via the terminal or `--yes`,
+  install and `doctor`. It is safe to pipe from `gh api` and has 5 offline tests.
 - Added external groups: a group can point at another Git repository and install it
   per harness with `skills` (managed copies), `claude-plugin` or `script` methods,
   with origin-checked checkouts, deliberate fast-forward updates, a CLI preflight,
