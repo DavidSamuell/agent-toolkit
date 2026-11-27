@@ -25,6 +25,44 @@ Local groups ship their skills in this repository. External groups point at anot
 Git repository and install it per harness (see [External groups](#external-groups)).
 All skills are instructions, not automatic workflow or job launchers.
 
+## Install by asking an agent
+
+Paste this into Claude Code or Oh My Pi (OMP) and replace the two placeholders.
+The agent clones or updates the toolkit, shows you the plan, installs, and checks the result.
+
+```text
+Install these groups from my agent toolkit (https://github.com/DavidSamuell/agent-toolkit):
+  Groups:    <GROUPS, e.g. aae, dspy — or "all">
+  Harnesses: <HARNESSES, e.g. claude, codex, omp>
+
+1. If ~/agent-toolkit does not exist, clone it. It is private, so use
+   `gh repo clone DavidSamuell/agent-toolkit ~/agent-toolkit` (or SSH if gh is not
+   signed in). If it exists, run `git -C ~/agent-toolkit pull --ff-only`.
+2. In ~/agent-toolkit, run `python3 manage.py list`. Check that every group exists
+   and supports every harness I asked for; tell me about any that do not (llm-wiki
+   has no Codex support) and leave those out.
+3. Run `python3 manage.py install --group <g> ... --agent <h> ... --dry-run`
+   (or `--all` for all groups), show me the plan, and wait for my OK.
+4. Run the same command without --dry-run, then `python3 manage.py doctor`, and report
+   what was installed for each harness.
+
+If the installer reports a conflict, stop and tell me. Do not edit the state file or
+move, overwrite or delete existing skills to get past it. At the end, tell me which
+harnesses I need to restart to pick up new skills or plugins.
+```
+
+Harness names: `claude` = Claude Code, `codex` = Codex, `omp` = Oh My Pi. Group names
+are in the first table above. For example:
+
+```text
+Install these groups from my agent toolkit (https://github.com/DavidSamuell/agent-toolkit):
+  Groups:    aae, dspy
+  Harnesses: claude, omp
+```
+
+followed by the numbered steps. Already-installed groups are skipped, so the same prompt
+also works to add a group to a machine that already has the toolkit.
+
 ## Fresh machine
 
 `bootstrap.sh` checks for `git` and Python 3.8+ (including the macOS case where
