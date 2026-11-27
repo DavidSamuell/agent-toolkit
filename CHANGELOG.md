@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `spartan-gpu-jobs`: batch-capable GPU inference must now sweep batch size from a
+  baseline toward the safe-memory boundary in an isolated pilot, keep about 20% headroom,
+  pick the fastest validated batch, and report the sweep (largest safe batch, untested range).
 - Docs: moved the external group reference to `docs/external-groups.md` (with steps for
   adding one); the README keeps a short summary, and per-group caveats are now group notes.
 - README: added a copy-paste prompt for installing chosen groups for chosen harnesses

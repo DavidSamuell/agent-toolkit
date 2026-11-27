@@ -154,9 +154,36 @@ Never cancel running work or duplicate it merely to chase a speculative estimate
 Distinguish three independent controls:
 
 1. **Inference batch size:** clips/examples processed together by one model.
-   Benchmark increasing batch sizes on long inputs; retain memory headroom. Validate
-   output coverage and incomplete final batches. For training, batch changes can alter
-   optimization/scientific behavior; do not change them without appropriate authorization.
+   For every batch-capable GPU inference workload, MUST explicitly try to improve
+   output throughput by increasing batch size toward the largest size that safely
+   fits the target allocation. A partition has no universal batch-size limit:
+   use the actual GPU/MIG profile, model, precision and representative input shapes.
+   Reuse credible measurements for the same workload/allocation when available;
+   otherwise benchmark in an isolated compute-node pilot, never a live production
+   worker or the login node. Advice-only requests require recommending this sweep,
+   not submitting jobs without authorization.
+   - Measure the current/default batch as a baseline, then progressively increase
+     (for example, double) the batch size. Do not stop merely because the default
+     fits or the first larger batch gives little improvement. Continue toward the
+     safe-memory boundary or a documented application batch limit; if the sweep
+     cannot be completed, state the untested range and limiting prerequisite.
+   - Retain explicit GPU-memory headroom (normally at least20%) and sufficient
+     host RAM. Stop unsafe candidates before launch when their memory requirement
+     is established; otherwise handle pilot OOM as a rejected candidate, preserve
+     measurements and refine between the last safe and first unsafe sizes when
+     useful. Never OOM production to discover a limit.
+   - Measure end-to-end output throughput, not just model-call speed, on matched
+     long/largest inputs with repeated timings. Validate score/output agreement,
+     exact coverage and incomplete final batches at candidate sizes.
+   - Select the fastest validated safe batch, not automatically the largest.
+     Prefer the smaller batch when throughput is effectively tied. Report the
+     largest tested safe size, any rejected/untested sizes, memory headroom and
+     why the selected size wins; do not call a truncated sweep the maximum.
+   - With a generic GPU request, validate the chosen batch on every eligible
+     profile or restrict the request to validated hardware; do not assume the
+     scheduler will allocate the largest-memory profile.
+   For training, batch changes can alter optimization/scientific behavior;
+   do not change them without appropriate authorization.
 2. **Job packing:** several recordings/inputs handled inside one GPU allocation.
    Amortize scheduling/startup overhead and reduce submission counts. Reuse a loaded
    model across inputs where supported. Balance batches by clip count/duration or measured
@@ -215,6 +242,8 @@ Report job IDs, selected partition and GPU/MIG profile, CPUs/RAM/walltime, task 
 packing and concurrency, manifest/result locations, comparison evidence, observed state,
 smoke results or pending verification, and preemption/restart risks. Distinguish GPU RAM
 from CPU RAM and tasks/allocations from physical GPU count when using MIG.
+Include the inference batch sweep or reused measurements, baseline/selected
+throughput, largest tested safe batch, memory headroom and any untested boundary.
 
 ## Official sources
 
