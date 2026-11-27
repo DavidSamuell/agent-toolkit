@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Added the `aae` group (CHSZLab/AgenticAlgorithmEngineering): the `aae@aae` plugin for
+  Claude Code and the `claude-plugin/skills/aae` skill for Codex and OMP.
 - Added `bootstrap.sh`, a fresh-machine entry point: prerequisite checks (including the
   macOS Python stub), clone, dry-run plan, confirmation via the terminal or `--yes`,
   install and `doctor`. It is safe to pipe from `gh api` and has 5 offline tests.

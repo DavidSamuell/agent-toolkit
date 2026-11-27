@@ -9,6 +9,7 @@ my agent tools on a fresh machine, for Codex, OMP and Claude Code.
 | `spartan-hpc` | local | `spartan-cpu-jobs`, `spartan-gpu-jobs` | skills | skills | skills |
 | `agent-skills` | external | [DavidSamuell/agent-skills](https://github.com/DavidSamuell/agent-skills): spec, plan, build, test, review, ship, blind-spot pass, quiz | skills | skills | plugin (adds `/spec`, `/build`, `/quiz`, …) |
 | `llm-wiki` | external | [llm-wiki-database](https://github.com/DavidSamuell/llm-wiki-database) cloned to `~/wiki`, configured by its `setup.sh` | not supported | setup script | setup script |
+| `aae` | external | [Agentic Algorithm Engineering](https://github.com/CHSZLab/AgenticAlgorithmEngineering): autonomous performance tuning with falsifiable hypotheses, benchmarks, patches and a report | skills | skills | plugin (adds `/aae:aae`) |
 
 Local groups ship their skills in this repository. External groups point at another
 Git repository and install it per harness (see [External groups](#external-groups)).
@@ -140,6 +141,11 @@ part of the filesystem transaction, and they are the one place this toolkit chan
 agent configuration and runs repository code: only list repositories you trust.
 `status`/`doctor` also report missing checkouts and Claude plugins that are not installed.
 
+For aae, Codex and OMP get the self-contained skill from the upstream repository's
+`claude-plugin/skills/aae` (the root `skills/aae` is made of symlinks, which the
+installer rejects). That edition bundles the knowledge base and a Markdown report
+template; the PDF report still needs Python 3 and LaTeX (`latexmk`) at run time.
+
 For Claude Code, agent-skills installs the plugin from the fork's default branch.
 Remove upstream `agent-skills@addy-agent-skills` first: both plugins are named
 `agent-skills`, so their commands collide.
@@ -228,6 +234,7 @@ groups/spartan-hpc/skills/
   spartan-gpu-jobs/SKILL.md
 groups/agent-skills/group.json  External: agent-skills fork (skills + Claude plugin)
 groups/llm-wiki/group.json      External: llm-wiki via its setup.sh
+groups/aae/group.json           External: Agentic Algorithm Engineering (skill + Claude plugin)
 tests/test_installation.py       Isolated behavior and rollback tests
 tests/test_external_groups.py    External checkouts, plugin and script methods (offline)
 tests/test_bootstrap.py          bootstrap.sh clone, confirmation and selection (offline)

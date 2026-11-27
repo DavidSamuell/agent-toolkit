@@ -5,6 +5,7 @@
     "general",
     "spartan-hpc",
     "agent-skills",
-    "llm-wiki"
+    "llm-wiki",
+    "aae"
   ]
 }
