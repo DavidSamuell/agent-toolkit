@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added the `dspy` group (OmidZamani/dspy-skills, 22 skills including the MIPROv2, GEPA,
+  SIMBA and BootstrapFewShot optimizers): plugin for Claude Code, skills for Codex and OMP.
+- README: the group table now says what each group does and when to use it; install
+  methods per harness moved to a second table.
 - Added the `aae` group (CHSZLab/AgenticAlgorithmEngineering): the `aae@aae` plugin for
   Claude Code and the `claude-plugin/skills/aae` skill for Codex and OMP.
 - Added `bootstrap.sh`, a fresh-machine entry point: prerequisite checks (including the

@@ -3,13 +3,23 @@
 Personal, grouped agent customizations and the single entry point for setting up
 my agent tools on a fresh machine, for Codex, OMP and Claude Code.
 
-| Group | Kind | What it installs | Codex | OMP | Claude Code |
+| Group | What it does | Use it when |
+| --- | --- | --- |
+| `general` | `using-git-worktrees`: sets up an isolated workspace (native tools, or a git worktree fallback) before work starts. | You start a feature or carry out an implementation plan and don't want to disturb your current checkout. |
+| `spartan-hpc` | `spartan-cpu-jobs`, `spartan-gpu-jobs`: write, submit, schedule and tune Slurm jobs and job arrays on Spartan, with a duplicate-work preflight and quota checks before submitting. | You run anything on Spartan, CPU or GPU. |
+| `agent-skills` | Engineering-lifecycle skills: spec, plan, build, test, review, ship, plus critical-thinking checks (blind-spot pass, doubt-driven development) and an explain-and-quiz skill. Claude Code gets slash commands such as `/spec`, `/build`, `/quiz`. | You build software features and want the agent to follow a disciplined process (spec first, tests, review) instead of jumping straight to code. |
+| `llm-wiki` | A personal LLM Wiki "second brain" in `~/wiki`, set up by its own `setup.sh` with a plugin, skills and session-sync hooks. | You want agent sessions and notes captured into one persistent knowledge base across harnesses. |
+| `aae` | Agentic Algorithm Engineering: an autonomous optimisation loop on existing code. You agree the benchmark, metric, correctness checks and budget; the agent then tests one falsifiable hypothesis per experiment, keeps or discards it, and leaves one patch per accepted change plus a PDF report. Claude Code gets `/aae:aae`. | You have a measurable benchmark (running time, memory, cost, WER) and want an agent to improve an existing code base or pipeline step by step. Not for broad hyperparameter sweeps; use Optuna or similar for those. |
+| `dspy` | 22 DSPy skills: designing signatures and modules, RAG and ReAct agents, evaluation, and prompt and few-shot optimizers (MIPROv2, GEPA, SIMBA, BootstrapFewShot, optimizer selection), through to fine-tuning and deployment. | Your LLM pipeline is, or can be, written in DSPy, and you want to optimise its prompts against a metric and a set of labelled examples instead of hand-tuning them. |
+
+| Group | Kind | Source | Codex | OMP | Claude Code |
 | --- | --- | --- | --- | --- | --- |
-| `general` | local | `using-git-worktrees` | skills | skills | skills |
-| `spartan-hpc` | local | `spartan-cpu-jobs`, `spartan-gpu-jobs` | skills | skills | skills |
-| `agent-skills` | external | [DavidSamuell/agent-skills](https://github.com/DavidSamuell/agent-skills): spec, plan, build, test, review, ship, blind-spot pass, quiz | skills | skills | plugin (adds `/spec`, `/build`, `/quiz`, …) |
-| `llm-wiki` | external | [llm-wiki-database](https://github.com/DavidSamuell/llm-wiki-database) cloned to `~/wiki`, configured by its `setup.sh` | not supported | setup script | setup script |
-| `aae` | external | [Agentic Algorithm Engineering](https://github.com/CHSZLab/AgenticAlgorithmEngineering): autonomous performance tuning with falsifiable hypotheses, benchmarks, patches and a report | skills | skills | plugin (adds `/aae:aae`) |
+| `general` | local | this repository | skills | skills | skills |
+| `spartan-hpc` | local | this repository | skills | skills | skills |
+| `agent-skills` | external | [DavidSamuell/agent-skills](https://github.com/DavidSamuell/agent-skills) | skills | skills | plugin |
+| `llm-wiki` | external | [llm-wiki-database](https://github.com/DavidSamuell/llm-wiki-database), cloned to `~/wiki` | not supported | setup script | setup script |
+| `aae` | external | [CHSZLab/AgenticAlgorithmEngineering](https://github.com/CHSZLab/AgenticAlgorithmEngineering) | skills | skills | plugin |
+| `dspy` | external | [OmidZamani/dspy-skills](https://github.com/OmidZamani/dspy-skills) | skills | skills | plugin |
 
 Local groups ship their skills in this repository. External groups point at another
 Git repository and install it per harness (see [External groups](#external-groups)).
@@ -146,6 +156,11 @@ For aae, Codex and OMP get the self-contained skill from the upstream repository
 installer rejects). That edition bundles the knowledge base and a Markdown report
 template; the PDF report still needs Python 3 and LaTeX (`latexmk`) at run time.
 
+The dspy skills only teach the agent DSPy; the project you use them in still needs
+`pip install dspy` (some skills list extras in the upstream `requirements-extras.txt`).
+They were written against DSPy 3.2.x, so check APIs against newer releases. Upstream's
+default branch is `master`.
+
 For Claude Code, agent-skills installs the plugin from the fork's default branch.
 Remove upstream `agent-skills@addy-agent-skills` first: both plugins are named
 `agent-skills`, so their commands collide.
@@ -235,6 +250,7 @@ groups/spartan-hpc/skills/
 groups/agent-skills/group.json  External: agent-skills fork (skills + Claude plugin)
 groups/llm-wiki/group.json      External: llm-wiki via its setup.sh
 groups/aae/group.json           External: Agentic Algorithm Engineering (skill + Claude plugin)
+groups/dspy/group.json          External: DSPy skills (skills + Claude plugin)
 tests/test_installation.py       Isolated behavior and rollback tests
 tests/test_external_groups.py    External checkouts, plugin and script methods (offline)
 tests/test_bootstrap.py          bootstrap.sh clone, confirmation and selection (offline)

@@ -6,6 +6,7 @@
     "spartan-hpc",
     "agent-skills",
     "llm-wiki",
-    "aae"
+    "aae",
+    "dspy"
   ]
 }
