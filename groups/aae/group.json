@@ -18,8 +18,10 @@
         "path": "claude-plugin/skills"
       },
       "omp": {
-        "method": "skills",
-        "path": "claude-plugin/skills"
+        "method": "omp-plugin",
+        "marketplace": "CHSZLab/AgenticAlgorithmEngineering",
+        "marketplace_name": "aae",
+        "plugin": "aae@aae"
       }
     }
   }

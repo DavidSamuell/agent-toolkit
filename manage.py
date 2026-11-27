@@ -36,7 +36,9 @@ STATE_RELATIVE = Path(".local") / "state" / "agent-toolkit"
 STATE_FILENAME = "installations.json"
 LOCK_FILENAME = "install.lock"
 SOURCES_RELATIVE = Path(".local") / "share" / "agent-toolkit" / "sources"
-EXTERNAL_METHODS = ("skills", "claude-plugin", "script")
+EXTERNAL_METHODS = ("skills", "claude-plugin", "omp-plugin", "script")
+# Plugin methods: method -> the only harness (and CLI) it is valid for.
+PLUGIN_METHODS = {"claude-plugin": "claude", "omp-plugin": "omp"}
 SYNC_MODES = ("ff-only", "clone-only")
 
 
@@ -478,7 +480,7 @@ def _parse_external(group: str, value: object, manifest_path: Path, home: Option
           "checkout": "managed" | "home:<relative path>",
           "sync": "ff-only" | "clone-only",
           "agents": {"<agent>": {"method": "skills", "path": "skills"}
-                                | {"method": "claude-plugin", "marketplace": "<source>",
+                                | {"method": "claude-plugin" | "omp-plugin", "marketplace": "<source>",
                                    "marketplace_name": "<name>", "plugin": "<plugin>@<marketplace>"}
                                 | {"method": "script", "command": ["argv", ...],
                                    "uninstall_note": "<manual removal steps>"}}
@@ -535,12 +537,12 @@ def _parse_external(group: str, value: object, manifest_path: Path, home: Option
             if rel.is_absolute() or any(part == ".." for part in rel.parts):
                 raise ToolkitError("skills path must stay inside the checkout: %s/%s" % (where, agent))
             skills_paths.add(spec["path"])
-        elif method == "claude-plugin":
+        elif method in PLUGIN_METHODS:
             keys = {"method", "marketplace", "marketplace_name", "plugin"}
-            if agent != "claude":
-                raise ToolkitError("claude-plugin method is only valid for claude: %s/%s" % (where, agent))
+            if agent != PLUGIN_METHODS[method]:
+                raise ToolkitError("%s method is only valid for %s: %s/%s" % (method, PLUGIN_METHODS[method], where, agent))
             if set(spec) != keys or not all(isinstance(spec[k], str) and spec[k] for k in keys):
-                raise ToolkitError("claude-plugin method takes marketplace, marketplace_name, plugin: %s" % where)
+                raise ToolkitError("%s method takes marketplace, marketplace_name, plugin: %s" % (method, where))
             if spec["plugin"].split("@")[-1] != spec["marketplace_name"]:
                 raise ToolkitError("plugin must be <name>@<marketplace_name>: %s" % where)
         else:
@@ -1339,25 +1341,69 @@ def _claude_plugin_state(spec: dict) -> Tuple[str, bool, bool]:
     return claude, has_marketplace, installed
 
 
-def _claude_plugin(spec: dict, operation: str, dry_run: bool) -> None:
-    claude, has_marketplace, installed = _claude_plugin_state(spec)
+def _omp_marketplace_names(omp: str) -> Set[str]:
+    """Names from `omp plugin marketplace list`, which has no JSON output.
+
+    The listing is a "Configured Marketplaces:" header followed by indented
+    "<name>  <source>" rows, or a "No marketplaces configured" message.
+    """
+    names: Set[str] = set()
+    in_list = False
+    for line in _query([omp, "plugin", "marketplace", "list"]).splitlines():
+        if line.strip().startswith("Configured Marketplaces"):
+            in_list = True
+            continue
+        if in_list and line[:1].isspace() and line.strip():
+            names.add(line.split()[0])
+    return names
+
+
+def _omp_plugin_state(spec: dict) -> Tuple[str, bool, bool]:
+    omp = _require_tool("omp")
+    has_marketplace = spec["marketplace_name"] in _omp_marketplace_names(omp)
+    argv = [omp, "plugin", "list", "--json"]
+    try:
+        listing = json.loads(_query(argv) or "{}")
+    except json.JSONDecodeError as exc:
+        raise ToolkitError("unexpected output from %s: %s" % (_quote(argv), exc))
+    entries = listing.get("marketplace", []) if isinstance(listing, dict) else []
+    installed = any(isinstance(item, dict) and item.get("id") == spec["plugin"] for item in entries)
+    return omp, has_marketplace, installed
+
+
+def _plugin_state(spec: dict) -> Tuple[str, bool, bool]:
+    return _omp_plugin_state(spec) if spec["method"] == "omp-plugin" else _claude_plugin_state(spec)
+
+
+def _plugin(spec: dict, operation: str, dry_run: bool) -> None:
+    """Install, update or uninstall a marketplace plugin with the harness's own CLI.
+
+    Claude Code and OMP share the marketplace model and plugin ids; they differ in
+    the update verb (OMP's `upgrade` is a forced reinstall from the refreshed
+    marketplace) and in `marketplace add`, which only Claude scopes.
+    """
+    omp = spec["method"] == "omp-plugin"
+    cli, has_marketplace, installed = _plugin_state(spec)
+    plugin, market = spec["plugin"], spec["marketplace_name"]
     steps: List[List[str]] = []
     if operation in ("install", "update"):
         if not has_marketplace:
-            steps.append([claude, "plugin", "marketplace", "add", spec["marketplace"], "--scope", "user"])
+            steps.append([cli, "plugin", "marketplace", "add", spec["marketplace"]]
+                         + ([] if omp else ["--scope", "user"]))
         elif operation == "update":
-            steps.append([claude, "plugin", "marketplace", "update", spec["marketplace_name"]])
+            steps.append([cli, "plugin", "marketplace", "update", market])
         if not installed:
-            steps.append([claude, "plugin", "install", spec["plugin"], "--scope", "user"])
+            steps.append([cli, "plugin", "install", plugin, "--scope", "user"])
         elif operation == "update":
-            steps.append([claude, "plugin", "update", spec["plugin"], "--scope", "user"])
+            steps.append([cli, "plugin", "upgrade" if omp else "update", plugin, "--scope", "user"])
     else:
         if installed:
-            steps.append([claude, "plugin", "uninstall", spec["plugin"], "--scope", "user"])
+            steps.append([cli, "plugin", "uninstall", plugin, "--scope", "user"])
         if has_marketplace:
-            steps.append([claude, "plugin", "marketplace", "remove", spec["marketplace_name"]])
+            steps.append([cli, "plugin", "marketplace", "remove", market])
     if not steps:
-        print("  claude plugin %s already %s" % (spec["plugin"], "installed" if operation != "uninstall" else "absent"))
+        print("  %s plugin %s already %s" % (PLUGIN_METHODS[spec["method"]], plugin,
+                                            "installed" if operation != "uninstall" else "absent"))
     for argv in steps:
         _step(argv, dry_run)
 
@@ -1391,8 +1437,8 @@ def _run_native(source: Source, pairs: Iterable[Tuple[str, str]], operation: str
                 dry_run: bool) -> None:
     for group, agent, external, spec in _native_pairs(source, pairs):
         print("%s %s/%s (%s):" % ("Would " + operation if dry_run else operation.capitalize(), group, agent, spec["method"]))
-        if spec["method"] == "claude-plugin":
-            _claude_plugin(spec, operation, dry_run)
+        if spec["method"] in PLUGIN_METHODS:
+            _plugin(spec, operation, dry_run)
         elif spec["method"] == "script":
             if operation == "uninstall":
                 continue
@@ -1411,7 +1457,7 @@ def _preflight_tools(source: Source, pairs: Iterable[Tuple[str, str]], skip_nati
     if skip_native:
         return
     for _group, _agent, _external, spec in _native_pairs(source, pairs):
-        _require_tool("claude" if spec["method"] == "claude-plugin" else spec["command"][0])
+        _require_tool(PLUGIN_METHODS.get(spec["method"]) or spec["command"][0])
 
 
 def _sync_external(source: Source, home: Path, groups: Iterable[str], operation: str, dry_run: bool) -> bool:
@@ -1440,14 +1486,15 @@ def _external_status(source: Source, home: Path, state: dict) -> List[str]:
         spec = external["agents"].get(agent)
         if spec is None:
             details.append("recorded agent no longer supported by %s: %s" % (group, agent))
-        elif spec["method"] == "claude-plugin":
+        elif spec["method"] in PLUGIN_METHODS:
+            harness = PLUGIN_METHODS[spec["method"]]
             try:
-                _claude, _market, installed = _claude_plugin_state(spec)
+                _cli, _market, installed = _plugin_state(spec)
             except ToolkitError as exc:
-                details.append("cannot verify claude plugin %s: %s" % (spec["plugin"], exc))
+                details.append("cannot verify %s plugin %s: %s" % (harness, spec["plugin"], exc))
                 continue
             if not installed:
-                details.append("claude plugin not installed: %s" % spec["plugin"])
+                details.append("%s plugin not installed: %s" % (harness, spec["plugin"]))
     return details
 
 

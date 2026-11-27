@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added the `omp-plugin` external method: installs a marketplace plugin with OMP's own
+  `omp plugin` CLI (OMP reads Claude's marketplace format), with idempotent install,
+  update (marketplace refresh + forced upgrade), uninstall and status checks.
+- agent-skills, aae and dspy now install for OMP as plugins instead of skill links, so
+  OMP gets agent-skills' slash commands and reviewer personas and AAE's main `AAE.md`.
+  Existing machines migrate with `python3 manage.py update`.
+- Added 6 offline tests for `omp-plugin`, including the skills-to-plugin migration.
 - `spartan-gpu-jobs`: batch-capable GPU inference must now sweep batch size from a
   baseline toward the safe-memory boundary in an isolated pilot, keep about 20% headroom,
   pick the fastest validated batch, and report the sweep (largest safe batch, untested range).

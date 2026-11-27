@@ -18,8 +18,10 @@
         "path": "skills"
       },
       "omp": {
-        "method": "skills",
-        "path": "skills"
+        "method": "omp-plugin",
+        "marketplace": "OmidZamani/dspy-skills",
+        "marketplace_name": "dspy-skills-marketplace",
+        "plugin": "dspy-skills@dspy-skills-marketplace"
       }
     }
   }

@@ -42,6 +42,54 @@ FAKE_CLAUDE = textwrap.dedent(
 )
 
 
+FAKE_OMP = textwrap.dedent(
+    """\
+    #!/usr/bin/env python3
+    # Minimal stand-in for the `omp plugin` CLI, with its real output formats:
+    # `marketplace list` is text only, `plugin list --json` is an object.
+    import json, os, sys
+    state_path = os.environ["FAKE_OMP_STATE"]
+    try:
+        state = json.load(open(state_path))
+    except FileNotFoundError:
+        state = {"marketplaces": [], "plugins": [], "calls": []}
+    args = sys.argv[1:]
+    state["calls"].append(args)
+    def save():
+        json.dump(state, open(state_path, "w"))
+    def fail(message):
+        save()
+        print(message)
+        sys.exit(1)
+    if args[:3] == ["plugin", "marketplace", "list"]:
+        if state["marketplaces"]:
+            print("Configured Marketplaces:\\n")
+            for name in state["marketplaces"]:
+                print("  %s  owner/%s" % (name, name))
+        else:
+            print("No marketplaces configured\\n\\nAdd one with: omp plugin marketplace add <source>")
+    elif args[:2] == ["plugin", "list"]:
+        print(json.dumps({"npm": [], "marketplace": [{"id": p, "scope": "user"} for p in state["plugins"]]}))
+    elif args[:3] == ["plugin", "marketplace", "add"]:
+        name = os.environ["FAKE_MARKETPLACE_NAME"]
+        if name in state["marketplaces"]:
+            fail("already exists")
+        state["marketplaces"].append(name)
+    elif args[:3] == ["plugin", "marketplace", "remove"]:
+        state["marketplaces"].remove(args[3])
+    elif args[:2] == ["plugin", "install"]:
+        if args[2] in state["plugins"]:
+            fail("already installed")
+        state["plugins"].append(args[2])
+    elif args[:2] == ["plugin", "uninstall"]:
+        if args[2] not in state["plugins"]:
+            fail("not installed")
+        state["plugins"].remove(args[2])
+    save()
+    """
+)
+
+
 class ExternalGroupTests(unittest.TestCase):
     """External groups: Git checkouts plus per-harness install methods.
 
@@ -62,11 +110,18 @@ class ExternalGroupTests(unittest.TestCase):
         fake = self.bin / "claude"
         fake.write_text(FAKE_CLAUDE, encoding="utf-8")
         fake.chmod(0o755)
+        self.omp_state = self.base / "omp-state.json"
+        fake_omp = self.bin / "omp"
+        fake_omp.write_text(FAKE_OMP, encoding="utf-8")
+        fake_omp.chmod(0o755)
 
         self.skills_upstream = self._make_upstream("skills-upstream", {
             "skills/alpha-skill/SKILL.md": self._skill("alpha-skill"),
             "skills/beta-skill/SKILL.md": self._skill("beta-skill"),
             "skills/README.md": "not a skill\n",
+        })
+        self.plugin_upstream = self._make_upstream("plugin-upstream", {
+            "skills/gamma-skill/SKILL.md": self._skill("gamma-skill"),
         })
         self.script_upstream = self._make_upstream("script-upstream", {
             "setup.sh": "#!/bin/sh\necho \"$@\" >> \"$PWD/setup-calls.log\"\n",
@@ -127,6 +182,25 @@ class ExternalGroupTests(unittest.TestCase):
                     },
                 },
             },
+            "ompplug": {
+                "name": "ompplug",
+                "description": "External skills installed as plugins for Claude and OMP.",
+                "external": {
+                    "repository": str(self.plugin_upstream),
+                    "ref": "main",
+                    "checkout": "managed",
+                    "sync": "ff-only",
+                    "agents": {
+                        "claude": {"method": "claude-plugin", "marketplace": "owner/lifecycle",
+                                   "marketplace_name": "lifecycle-market",
+                                   "plugin": "lifecycle@lifecycle-market"},
+                        "codex": {"method": "skills", "path": "skills"},
+                        "omp": {"method": "omp-plugin", "marketplace": "owner/lifecycle",
+                                "marketplace_name": "lifecycle-market",
+                                "plugin": "lifecycle@lifecycle-market"},
+                    },
+                },
+            },
             "wiki": {
                 "name": "wiki",
                 "description": "External tool configured by its own setup script.",
@@ -156,6 +230,8 @@ class ExternalGroupTests(unittest.TestCase):
         env["HOME"] = str(self.home)
         env["AGENT_TOOLKIT_CLAUDE"] = str(self.bin / "claude")
         env["FAKE_CLAUDE_STATE"] = str(self.claude_state)
+        env["AGENT_TOOLKIT_OMP"] = str(self.bin / "omp")
+        env["FAKE_OMP_STATE"] = str(self.omp_state)
         env["FAKE_MARKETPLACE_NAME"] = "lifecycle-market"
         return subprocess.run(
             [sys.executable, str(self.repo / "manage.py"), "--home", str(self.home)] + [str(a) for a in args],
@@ -249,6 +325,87 @@ class ExternalGroupTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("claude plugin not installed", result.stdout)
 
+    # ---------- omp-plugin method ----------
+
+    def _omp(self):
+        return json.loads(self.omp_state.read_text()) if self.omp_state.exists() else {"calls": []}
+
+    def _write_lifecycle(self, omp_spec):
+        # Rewrite only the lifecycle group's omp entry, keeping the other fixtures.
+        path = self.repo / "groups" / "lifecycle" / "group.json"
+        manifest = json.loads(path.read_text())
+        manifest["external"]["agents"]["omp"] = omp_spec
+        self._write_json(path, manifest)
+
+    def test_omp_plugin_install_is_idempotent_and_uninstalls(self):
+        self._ok("install", "--group", "ompplug", "--agent", "omp")
+        state = self._omp()
+        self.assertEqual(state["plugins"], ["lifecycle@lifecycle-market"])
+        self.assertIn(["plugin", "marketplace", "add", "owner/lifecycle"], state["calls"])
+        self.assertIn(["plugin", "install", "lifecycle@lifecycle-market", "--scope", "user"], state["calls"])
+        self.assertFalse((self.home / ".omp" / "agent" / "skills" / "gamma-skill").exists(),
+                         "omp gets the plugin, not skill links")
+        self.assertFalse((self.home / ".agents" / "skills" / "gamma-skill").exists(),
+                         "no canonical copy without a skills-method binding")
+        self._ok("status")
+
+        self._ok("install", "--group", "ompplug", "--agent", "omp")
+        installs = [c for c in self._omp()["calls"] if c[:2] == ["plugin", "install"]]
+        self.assertEqual(len(installs), 1, "an installed plugin is not reinstalled")
+
+        self._ok("uninstall", "--group", "ompplug", "--agent", "omp")
+        state = self._omp()
+        self.assertEqual(state["plugins"], [])
+        self.assertEqual(state["marketplaces"], [])
+
+    def test_omp_plugin_update_refreshes_marketplace_and_upgrades(self):
+        self._ok("install", "--group", "ompplug", "--agent", "omp")
+        self._ok("update")
+        calls = self._omp()["calls"]
+        self.assertIn(["plugin", "marketplace", "update", "lifecycle-market"], calls)
+        self.assertIn(["plugin", "upgrade", "lifecycle@lifecycle-market", "--scope", "user"], calls)
+
+    def test_omp_and_claude_plugins_install_side_by_side(self):
+        self._ok("install", "--group", "ompplug", "--agent", "omp", "--agent", "claude", "--agent", "codex")
+        self.assertEqual(self._omp()["plugins"], ["lifecycle@lifecycle-market"])
+        self.assertEqual(self._claude()["plugins"], ["lifecycle@lifecycle-market"])
+        self.assertTrue((self.home / ".agents" / "skills" / "gamma-skill" / "SKILL.md").is_file())
+        self.assertFalse((self.home / ".omp" / "agent" / "skills" / "gamma-skill").exists())
+        self._ok("doctor")
+
+    def test_status_reports_missing_omp_plugin(self):
+        self._ok("install", "--group", "ompplug", "--agent", "omp")
+        self.omp_state.write_text(json.dumps({"marketplaces": [], "plugins": [], "calls": []}))
+        result = self._run("status")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("omp plugin not installed", result.stdout)
+
+    def test_missing_omp_cli_stops_before_any_clone(self):
+        (self.bin / "omp").unlink()
+        result = self._run("install", "--group", "ompplug", "--agent", "omp")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("not found on PATH", result.stderr)
+        self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_switching_omp_from_skills_to_plugin_migrates_on_update(self):
+        self._ok("install", "--group", "lifecycle", "--agent", "omp", "--agent", "codex")
+        link = self.home / ".omp" / "agent" / "skills" / "alpha-skill"
+        self.assertTrue(link.is_symlink())
+
+        self._write_lifecycle({"method": "omp-plugin", "marketplace": "owner/lifecycle",
+                               "marketplace_name": "lifecycle-market",
+                               "plugin": "lifecycle@lifecycle-market"})
+        result = self._run("status")
+        self.assertEqual(result.returncode, 1, "the old skill link is stale until update")
+        self.assertIn("stale compatibility link", result.stdout)
+
+        self._ok("update")
+        self.assertFalse(os.path.lexists(link), "update removes the old OMP skill link")
+        self.assertTrue((self.home / ".agents" / "skills" / "alpha-skill" / "SKILL.md").is_file(),
+                        "codex keeps its copy")
+        self.assertEqual(self._omp()["plugins"], ["lifecycle@lifecycle-market"])
+        self._ok("doctor")
+
     # ---------- script method ----------
 
     def test_script_method_runs_in_checkout_and_uninstall_needs_skip_native(self):
@@ -277,6 +434,8 @@ class ExternalGroupTests(unittest.TestCase):
     def test_invalid_external_manifests_are_rejected(self):
         bad_specs = [
             {"codex": {"method": "claude-plugin", "marketplace": "a/b", "marketplace_name": "m", "plugin": "p@m"}},
+            {"claude": {"method": "omp-plugin", "marketplace": "a/b", "marketplace_name": "m", "plugin": "p@m"}},
+            {"omp": {"method": "omp-plugin", "marketplace": "a/b", "marketplace_name": "m", "plugin": "p@other"}},
             {"codex": {"method": "teleport"}},
             {"codex": {"method": "skills", "path": "../outside"}},
         ]

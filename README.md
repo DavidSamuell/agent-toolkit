@@ -16,23 +16,32 @@ my agent tools on a fresh machine, for Codex, OMP and Claude Code.
 | --- | --- | --- | --- | --- | --- |
 | `general` | local | this repository | skills | skills | skills |
 | `spartan-hpc` | local | this repository | skills | skills | skills |
-| `agent-skills` | external | [DavidSamuell/agent-skills](https://github.com/DavidSamuell/agent-skills) | skills | skills | plugin |
+| `agent-skills` | external | [DavidSamuell/agent-skills](https://github.com/DavidSamuell/agent-skills) | skills | plugin | plugin |
 | `llm-wiki` | external | [llm-wiki-database](https://github.com/DavidSamuell/llm-wiki-database), cloned to `~/wiki` | not supported | setup script | setup script |
-| `aae` | external | [CHSZLab/AgenticAlgorithmEngineering](https://github.com/CHSZLab/AgenticAlgorithmEngineering) | skills | skills | plugin |
-| `dspy` | external | [OmidZamani/dspy-skills](https://github.com/OmidZamani/dspy-skills) | skills | skills | plugin |
+| `aae` | external | [CHSZLab/AgenticAlgorithmEngineering](https://github.com/CHSZLab/AgenticAlgorithmEngineering) | skills | plugin | plugin |
+| `dspy` | external | [OmidZamani/dspy-skills](https://github.com/OmidZamani/dspy-skills) | skills | plugin | plugin |
 
 Local groups ship their skills in this repository. External groups point at another
 Git repository and install it per harness (see [External groups](#external-groups)).
 All skills are instructions, not automatic workflow or job launchers.
 
+"plugin" means the harness's own plugin system installs it from the upstream
+marketplace (`claude plugin …` or `omp plugin …`), so Claude Code and OMP get
+everything the plugin ships: skills plus slash commands and subagents where it has
+them (agent-skills' `/spec`, `/ship` and its reviewer personas). Codex has no
+compatible plugin system and gets the skills only.
+
 Group notes:
 
-- **agent-skills**: in Claude Code, remove upstream `agent-skills@addy-agent-skills`
+- **agent-skills**: in Claude Code and OMP, remove upstream `agent-skills@addy-agent-skills`
   first. Both plugins are named `agent-skills`, so their commands collide.
-- **aae**: Codex and OMP get the self-contained skill from upstream's
+- **aae**: Codex gets the self-contained skill from upstream's
   `claude-plugin/skills/aae` (its root `skills/aae` is symlinks, which the installer
-  rejects). The PDF report needs Python 3 and LaTeX (`latexmk`); without them you still
-  get the patches.
+  rejects); Claude Code and OMP get the main `AAE.md` through the plugin. The PDF
+  report needs Python 3 and LaTeX (`latexmk`); without them you still get the patches.
+- **OMP and Claude plugins**: OMP can also load plugins installed by Claude Code if
+  its `claude-plugins` source is turned on. Leave it off so OMP uses only its own
+  installs and nothing loads twice.
 - **dspy**: the skills only teach the agent DSPy; the project still needs
   `pip install dspy`. They target DSPy 3.2.x, so check APIs against newer releases.
 
@@ -73,6 +82,8 @@ Install these groups from my agent toolkit (https://github.com/DavidSamuell/agen
 
 followed by the numbered steps. Already-installed groups are skipped, so the same prompt
 also works to add a group to a machine that already has the toolkit.
+After pulling a toolkit change that switches how a group installs (as when OMP moved
+from skill links to plugins), run `python3 manage.py update` to apply it.
 
 ## Fresh machine
 
@@ -107,8 +118,8 @@ python3 manage.py doctor
 ```
 
 `--all` installs every group for every harness it supports, so llm-wiki is skipped for
-Codex. External groups need `git`, plus `claude` for the Claude Code plugin and `bash`
-plus the target CLI (`claude` / `omp`) for llm-wiki's setup script. GitHub access to
+Codex. External groups need `git`, plus the harness CLI (`claude` / `omp`) for plugin
+installs and `bash` plus the target CLI for llm-wiki's setup script. GitHub access to
 the private llm-wiki repository uses your normal Git credentials.
 
 ## Install
@@ -157,7 +168,7 @@ and automatic model selection are separate behaviors.
 
 Four groups (`agent-skills`, `llm-wiki`, `aae`, `dspy`) are external: their
 `group.json` points at another Git repository, which the toolkit clones and installs
-per harness, as skill copies, a Claude Code plugin or the project's own setup script.
+per harness, as skill copies, a Claude Code or OMP plugin, or the project's own setup script.
 `update` brings in upstream changes when you run it (llm-wiki syncs `~/wiki` itself).
 External groups run code from those repositories, so only add ones you trust.
 

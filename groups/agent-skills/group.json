@@ -18,8 +18,10 @@
         "path": "skills"
       },
       "omp": {
-        "method": "skills",
-        "path": "skills"
+        "method": "omp-plugin",
+        "marketplace": "DavidSamuell/agent-skills",
+        "marketplace_name": "davidsamuell-agent-skills",
+        "plugin": "agent-skills@davidsamuell-agent-skills"
       }
     }
   }
