@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Docs: moved the external group reference to `docs/external-groups.md` (with steps for
+  adding one); the README keeps a short summary, and per-group caveats are now group notes.
 - README: added a copy-paste prompt for installing chosen groups for chosen harnesses
   by asking an agent in Claude Code or OMP.
 - Added the `dspy` group (OmidZamani/dspy-skills, 22 skills including the MIPROv2, GEPA,

@@ -25,6 +25,17 @@ Local groups ship their skills in this repository. External groups point at anot
 Git repository and install it per harness (see [External groups](#external-groups)).
 All skills are instructions, not automatic workflow or job launchers.
 
+Group notes:
+
+- **agent-skills**: in Claude Code, remove upstream `agent-skills@addy-agent-skills`
+  first. Both plugins are named `agent-skills`, so their commands collide.
+- **aae**: Codex and OMP get the self-contained skill from upstream's
+  `claude-plugin/skills/aae` (its root `skills/aae` is symlinks, which the installer
+  rejects). The PDF report needs Python 3 and LaTeX (`latexmk`); without them you still
+  get the patches.
+- **dspy**: the skills only teach the agent DSPy; the project still needs
+  `pip install dspy`. They target DSPy 3.2.x, so check APIs against newer releases.
+
 ## Install by asking an agent
 
 Paste this into Claude Code or Oh My Pi (OMP) and replace the two placeholders.
@@ -144,64 +155,14 @@ and automatic model selection are separate behaviors.
 
 ## External groups
 
-An external group's `group.json` has an `external` block instead of a `skills` list:
+Four groups (`agent-skills`, `llm-wiki`, `aae`, `dspy`) are external: their
+`group.json` points at another Git repository, which the toolkit clones and installs
+per harness, as skill copies, a Claude Code plugin or the project's own setup script.
+`update` brings in upstream changes when you run it (llm-wiki syncs `~/wiki` itself).
+External groups run code from those repositories, so only add ones you trust.
 
-```json
-{
-  "name": "agent-skills",
-  "description": "...",
-  "external": {
-    "repository": "https://github.com/DavidSamuell/agent-skills.git",
-    "ref": "main",
-    "checkout": "managed",
-    "sync": "ff-only",
-    "agents": {
-      "claude": {"method": "claude-plugin", "marketplace": "DavidSamuell/agent-skills",
-                 "marketplace_name": "davidsamuell-agent-skills",
-                 "plugin": "agent-skills@davidsamuell-agent-skills"},
-      "codex": {"method": "skills", "path": "skills"},
-      "omp": {"method": "skills", "path": "skills"}
-    }
-  }
-}
-```
-
-- **checkout**: `managed` clones to `~/.local/share/agent-toolkit/sources/<group>`;
-  `home:<path>` uses a fixed location such as `home:wiki` → `~/wiki`. An existing
-  checkout is reused only if its `origin` matches `repository`.
-- **sync**: `ff-only` fast-forwards the checkout on `update` and refuses a dirty tree;
-  `clone-only` clones when missing and otherwise leaves the checkout to the tool
-  (llm-wiki syncs `~/wiki` itself). `install` never pulls; updates stay deliberate.
-- **methods**, one per harness. A harness missing from `agents` is unsupported, and
-  installing it is refused:
-  - `skills`: every `<path>/<skill>/SKILL.md` in the checkout goes through the same
-    managed-copy, ownership, drift and rollback rules as local skills.
-  - `claude-plugin`: adds the marketplace and installs the plugin at user scope;
-    `update` refreshes both; `uninstall` removes both. Already-present items are skipped.
-  - `script`: runs the repository's own setup command in the checkout on `install`
-    and `update`. Scripts have no uninstaller, so `uninstall` refuses and prints the
-    manual steps from `uninstall_note`; after doing them, `uninstall --skip-native`
-    drops the toolkit binding.
-
-Native steps (plugin commands and setup scripts) run before the binding is recorded,
-so a failure leaves no binding behind, and every step is safe to rerun. They are not
-part of the filesystem transaction, and they are the one place this toolkit changes
-agent configuration and runs repository code: only list repositories you trust.
-`status`/`doctor` also report missing checkouts and Claude plugins that are not installed.
-
-For aae, Codex and OMP get the self-contained skill from the upstream repository's
-`claude-plugin/skills/aae` (the root `skills/aae` is made of symlinks, which the
-installer rejects). That edition bundles the knowledge base and a Markdown report
-template; the PDF report still needs Python 3 and LaTeX (`latexmk`) at run time.
-
-The dspy skills only teach the agent DSPy; the project you use them in still needs
-`pip install dspy` (some skills list extras in the upstream `requirements-extras.txt`).
-They were written against DSPy 3.2.x, so check APIs against newer releases. Upstream's
-default branch is `master`.
-
-For Claude Code, agent-skills installs the plugin from the fork's default branch.
-Remove upstream `agent-skills@addy-agent-skills` first: both plugins are named
-`agent-skills`, so their commands collide.
+The manifest format, install methods and how to add a new external group are in
+[docs/external-groups.md](docs/external-groups.md).
 
 ## Deliberate updates
 
@@ -289,6 +250,7 @@ groups/agent-skills/group.json  External: agent-skills fork (skills + Claude plu
 groups/llm-wiki/group.json      External: llm-wiki via its setup.sh
 groups/aae/group.json           External: Agentic Algorithm Engineering (skill + Claude plugin)
 groups/dspy/group.json          External: DSPy skills (skills + Claude plugin)
+docs/external-groups.md         External group manifest reference and how to add one
 tests/test_installation.py       Isolated behavior and rollback tests
 tests/test_external_groups.py    External checkouts, plugin and script methods (offline)
 tests/test_bootstrap.py          bootstrap.sh clone, confirmation and selection (offline)
@@ -300,8 +262,7 @@ unique. Each group currently accepts only `name`, `description`, and `skills`.
 Skill directories may contain supporting files and executable helpers; installation
 does not run those helpers.
 
-To add an external group, create `groups/<group>/group.json` with an `external` block
-(the directory holds nothing else) and add the name to `toolkit.json`.
+To add an external group, see [docs/external-groups.md](docs/external-groups.md#adding-an-external-group).
 
 Local groups still ship no commands or hooks. Future
 native assets belong under `groups/<group>/commands/<harness>/` and
