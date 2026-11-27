@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- README: added a copy-paste prompt for installing chosen groups for chosen harnesses
+  by asking an agent in Claude Code or OMP.
 - Added the `dspy` group (OmidZamani/dspy-skills, 22 skills including the MIPROv2, GEPA,
   SIMBA and BootstrapFewShot optimizers): plugin for Claude Code, skills for Codex and OMP.
 - README: the group table now says what each group does and when to use it; install
