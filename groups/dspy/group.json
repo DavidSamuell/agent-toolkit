@@ -1,0 +1,26 @@
+{
+  "name": "dspy",
+  "description": "DSPy skills (OmidZamani/dspy-skills): build, evaluate and optimize LLM programs, including prompt optimizers (MIPROv2, GEPA, SIMBA, BootstrapFewShot)",
+  "external": {
+    "repository": "https://github.com/OmidZamani/dspy-skills.git",
+    "ref": "master",
+    "checkout": "managed",
+    "sync": "ff-only",
+    "agents": {
+      "claude": {
+        "method": "claude-plugin",
+        "marketplace": "OmidZamani/dspy-skills",
+        "marketplace_name": "dspy-skills-marketplace",
+        "plugin": "dspy-skills@dspy-skills-marketplace"
+      },
+      "codex": {
+        "method": "skills",
+        "path": "skills"
+      },
+      "omp": {
+        "method": "skills",
+        "path": "skills"
+      }
+    }
+  }
+}

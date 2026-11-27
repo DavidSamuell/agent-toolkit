@@ -1,0 +1,26 @@
+{
+  "name": "aae",
+  "description": "Agentic Algorithm Engineering (CHSZLab): autonomous performance tuning through falsifiable hypotheses, benchmarks, numbered patches and a PDF report",
+  "external": {
+    "repository": "https://github.com/CHSZLab/AgenticAlgorithmEngineering.git",
+    "ref": "main",
+    "checkout": "managed",
+    "sync": "ff-only",
+    "agents": {
+      "claude": {
+        "method": "claude-plugin",
+        "marketplace": "CHSZLab/AgenticAlgorithmEngineering",
+        "marketplace_name": "aae",
+        "plugin": "aae@aae"
+      },
+      "codex": {
+        "method": "skills",
+        "path": "claude-plugin/skills"
+      },
+      "omp": {
+        "method": "skills",
+        "path": "claude-plugin/skills"
+      }
+    }
+  }
+}
